@@ -1,0 +1,156 @@
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+import joblib
+
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import Input, Dense
+from tensorflow.keras.optimizers import Adam
+
+# 1) Load data
+excel_file_path = r"C:\Users\AKIL\OneDrive\Desktop\Diabetes risk prediction\diabetes dataset.xlsx"
+df = pd.read_excel(excel_file_path)
+
+# 2) Basic preprocessing
+df['Gender'] = df['Gender'].map({'Male': 0, 'Female': 1})
+
+features = [
+    'Gender', 'Pregnancies', 'Glucose', 'BloodPressure', 'SkinThickness', 'Insulin',
+    'BMI', 'DiabetesPedigreeFunction', 'Age',
+    'Gene1_Mutation', 'Gene2_Mutation', 'Gene3_Mutation', 'Gene4_Mutation',
+    'PolygenicRiskScore', 'GeneExpressionLevel',
+    'FamilyHistoryGeneticRisk', 'InsulinResistanceGeneScore'
+]
+X = df[features]
+y_classification = df['Outcome']
+
+# 3) Split + scale
+X_train, X_test, y_train_class, y_test_class = train_test_split(
+    X, y_classification, test_size=0.2, random_state=42
+)
+
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# 4) Autoencoder (kept your 17-dim encoded layer to avoid changing design)
+input_layer = Input(shape=(X_train_scaled.shape[1],))
+encoded = Dense(17, activation='relu')(input_layer)
+decoded = Dense(X_train_scaled.shape[1], activation='sigmoid')(encoded)
+
+autoencoder = Model(inputs=input_layer, outputs=decoded)
+autoencoder.compile(optimizer=Adam(), loss='binary_crossentropy')
+autoencoder.fit(X_train_scaled, X_train_scaled, epochs=50, batch_size=32, verbose=1)
+
+# 5) Build encoder model and transform features
+encoder = Model(inputs=input_layer, outputs=encoded)
+encoded_X_train = encoder.predict(X_train_scaled)
+encoded_X_test = encoder.predict(X_test_scaled)
+
+# 6) Classifier on encoded features
+clf = Sequential()
+clf.add(Dense(32, activation='relu', input_dim=encoded_X_train.shape[1]))
+clf.add(Dense(1, activation='sigmoid'))
+clf.compile(optimizer=Adam(), loss='binary_crossentropy', metrics=['accuracy'])
+clf.fit(encoded_X_train, y_train_class, epochs=50, batch_size=32, verbose=1)
+
+# 7) Save models + scaler
+clf.save('diabetes_classification_model_autoencoder.keras')
+encoder.save('encoder.keras')
+joblib.dump(scaler, 'scaler.pkl')
+
+#UI STREAMLIT
+
+import pandas as pd
+import joblib
+import streamlit as st
+import matplotlib.pyplot as plt
+from tensorflow.keras.models import load_model
+
+classification_model = load_model('diabetes_classification_model_autoencoder.keras')
+scaler = joblib.load('scaler.pkl')
+
+if "page" not in st.session_state:
+    st.session_state.page = "consent"
+
+if st.session_state.page == "consent":
+    st.title("Diabetes Risk Prediction")
+    consent = st.checkbox("I agree to share my genetic and health data.")
+    if consent and st.button("Proceed"):
+        st.session_state.page = "input"
+
+if st.session_state.page == "input":
+    st.title("Provide Your Health and Genetic Data")
+    
+    gender = st.selectbox("Gender", ["Select Gender", "Male", "Female"], index=0)
+    
+    pregnancies = 0  # Initialize pregnancies to 0
+    
+    if gender == "Select Gender":
+        st.warning("Please select your gender.")
+    elif gender == "Female":
+        pregnancies = st.number_input("Number of Pregnancies", min_value=0, max_value=15, value=1)
+    
+    glucose = st.number_input("Glucose Level (mg/dL)", min_value=50, max_value=250, value=100)
+    blood_pressure = st.number_input("Blood Pressure (mmHg)", min_value=50, max_value=250, value=120)
+    skin_thickness = st.number_input("Skin Thickness (mm)", min_value=0, max_value=5, value=3)
+    insulin = st.number_input("Insulin Level (IU/mL)", min_value=0, max_value=60, value=25)
+    bmi = st.number_input("BMI", min_value=10.0, max_value=50.0, value=25.0)
+    dpf = st.number_input("Diabetes Pedigree Function", min_value=0.0, max_value=2.5, value=0.5)
+    age = st.slider("Age", min_value=10, max_value=80, value=30)
+    gene1_mutation = st.selectbox("Gene1 Mutation", [0, 1], index=0)
+    gene2_mutation = st.selectbox("Gene2 Mutation", [0, 1], index=0)
+    gene3_mutation = st.selectbox("Gene3 Mutation", [0, 1], index=0)
+    gene4_mutation = st.selectbox("Gene4 Mutation", [0, 1], index=0)
+    polygenic_risk = st.number_input("Polygenic Risk Score", min_value=0.0, max_value=2.5, value=0.5)
+    gene_expression_level = st.number_input("Gene Expression Level", min_value=0.0, max_value=10.0, value=5.0)
+    family_history_genetic_risk = st.number_input("Family History Genetic Risk", min_value=0, max_value=10, value=5)
+    insulin_resistance_gene_score = st.number_input("Insulin Resistance Gene Score", min_value=0.0, max_value=10.0, value=1.0)
+
+    input_data = pd.DataFrame([{
+        'Gender': 1 if gender == "Female" else 0,
+        'Pregnancies': pregnancies,
+        'Glucose': glucose,
+        'BloodPressure': blood_pressure,
+        'SkinThickness': skin_thickness,
+        'Insulin': insulin,
+        'BMI': bmi,
+        'DiabetesPedigreeFunction': dpf,
+        'Age': age,
+        'Gene1_Mutation': gene1_mutation,
+        'Gene2_Mutation': gene2_mutation,
+        'Gene3_Mutation': gene3_mutation,
+        'Gene4_Mutation': gene4_mutation,
+        'PolygenicRiskScore': polygenic_risk,
+        'GeneExpressionLevel': gene_expression_level,
+        'FamilyHistoryGeneticRisk': family_history_genetic_risk,
+        'InsulinResistanceGeneScore': insulin_resistance_gene_score
+    }])
+
+    input_data_scaled = scaler.transform(input_data)
+
+    if st.button('Predict'):
+        risk_prediction = classification_model.predict(input_data_scaled)
+        risk_score = risk_prediction[0][0]  # Extract the scalar value
+        risk = "High" if risk_score >= 0.5 else "Low"
+        st.write(f"**Diabetes Risk**: {risk}")
+        
+        # Visualization for risk prediction
+        fig, ax = plt.subplots()
+        ax.pie([risk_score, 1 - risk_score], labels=["High Risk", "Low Risk"], autopct='%1.1f%%', startangle=90)
+        ax.axis('equal')
+        st.pyplot(fig)
+
+        if risk == "High":
+            st.subheader("Recommendations to Lower Risk")
+            st.write("""                - **Consult a healthcare provider**: Schedule a checkup to discuss your risk and get personalized advice.
+                - **Monitor blood sugar levels**: Regularly check your blood glucose levels to track any changes.
+                - **Maintain a healthy diet**: Focus on a balanced diet rich in whole grains, lean proteins, and vegetables.
+                - **Exercise regularly**: Aim for at least 30 minutes of moderate physical activity most days of the week.
+                - **Maintain a healthy weight**: Losing even a small amount of weight can significantly reduce your risk.
+                - **Stay hydrated**: Drink plenty of water to help manage blood sugar levels.
+                - **Reduce stress**: Practice stress management techniques such as meditation, yoga, or deep breathing exercises.
+                - **Consider genetic counseling**: If family history or genetic mutations are contributing to risk, genetic counseling may help.
+            """)
+            st.write("These lifestyle changes can help in reducing your diabetes risk. Always consult a healthcare professional before making significant changes.")
+
